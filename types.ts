@@ -267,6 +267,19 @@ export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
 
+export const DEFAULT_FORK_PREAMBLE =
+	"You are a delegated subagent with access to the parent session's context for reference. " +
+	"Your sole job is to execute the task below. Do not continue or respond to the prior conversation " +
+	"— focus exclusively on completing this task using your tools.";
+
+export function wrapForkTask(task: string, preamble?: string | false): string {
+	if (preamble === false) return task;
+	const effectivePreamble = preamble ?? DEFAULT_FORK_PREAMBLE;
+	const wrappedPrefix = `${effectivePreamble}\n\nTask:\n`;
+	if (task.startsWith(wrappedPrefix)) return task;
+	return `${wrappedPrefix}${task}`;
+}
+
 // ============================================================================
 // Recursion Depth Guard
 // ============================================================================

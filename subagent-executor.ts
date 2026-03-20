@@ -37,6 +37,7 @@ import {
 	MAX_CONCURRENCY,
 	MAX_PARALLEL,
 	checkSubagentDepth,
+	wrapForkTask,
 } from "./types.js";
 
 interface TaskParam {
@@ -223,6 +224,26 @@ function collectChainSessionFiles(
 	return sessionFiles;
 }
 
+function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["context"]): ChainStep[] {
+	if (context !== "fork") return chain;
+	return chain.map((step, stepIndex) => {
+		if (isParallelStep(step)) {
+			return {
+				...step,
+				parallel: step.parallel.map((task) => ({
+					...task,
+					task: wrapForkTask(task.task ?? "{previous}"),
+				})),
+			};
+		}
+		const sequential = step as SequentialStep;
+		return {
+			...sequential,
+			task: wrapForkTask(sequential.task ?? (stepIndex === 0 ? "{task}" : "{previous}")),
+		};
+	});
+}
+
 function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
 	const {
 		params,
@@ -252,8 +273,9 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	if (hasChain && params.chain) {
 		const normalized = normalizeSkillInput(params.skill);
 		const chainSkills = normalized === false ? [] : (normalized ?? []);
+		const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
 		return executeAsyncChain(id, {
-			chain: params.chain as ChainStep[],
+			chain,
 			agents,
 			ctx: asyncCtx,
 			cwd: params.cwd,
@@ -263,7 +285,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			shareEnabled,
 			sessionRoot,
 			chainSkills,
-			sessionFilesByFlatIndex: collectChainSessionFiles(params.chain as ChainStep[], sessionFileForIndex),
+			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForIndex),
 		});
 	}
 
@@ -282,7 +304,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
-			task: params.task!,
+			task: params.context === "fork" ? wrapForkTask(params.task!) : params.task!,
 			agentConfig: a,
 			ctx: asyncCtx,
 			cwd: params.cwd,
@@ -317,8 +339,9 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	} = data;
 	const normalized = normalizeSkillInput(params.skill);
 	const chainSkills = normalized === false ? [] : (normalized ?? []);
+	const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
 	const chainResult = await executeChain({
-		chain: params.chain as ChainStep[],
+		chain,
 		task: params.task,
 		agents,
 		ctx,
@@ -347,8 +370,9 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		}
 		const id = randomUUID();
 		const asyncCtx = { pi: deps.pi, cwd: ctx.cwd, currentSessionId: deps.state.currentSessionId! };
+		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
 		return executeAsyncChain(id, {
-			chain: chainResult.requestedAsync.chain,
+			chain: asyncChain,
 			agents,
 			ctx: asyncCtx,
 			cwd: params.cwd,
@@ -358,7 +382,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			shareEnabled,
 			sessionRoot,
 			chainSkills: chainResult.requestedAsync.chainSkills,
-			sessionFilesByFlatIndex: collectChainSessionFiles(chainResult.requestedAsync.chain, sessionFileForIndex),
+			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForIndex),
 		});
 	}
 
@@ -463,7 +487,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			const asyncCtx = { pi: deps.pi, cwd: ctx.cwd, currentSessionId: deps.state.currentSessionId! };
 			const parallelTasks = tasks.map((t, i) => ({
 				agent: t.agent,
-				task: taskTexts[i]!,
+				task: params.context === "fork" ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!,
 				cwd: t.cwd,
 				...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
 				...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
@@ -487,6 +511,11 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 	const behaviors = agentConfigs.map((c) => resolveStepBehavior(c, {}));
 	const liveResults: (SingleResult | undefined)[] = new Array(tasks.length).fill(undefined);
 	const liveProgress: (AgentProgress | undefined)[] = new Array(tasks.length).fill(undefined);
+	if (params.context === "fork") {
+		for (let i = 0; i < taskTexts.length; i++) {
+			taskTexts[i] = wrapForkTask(taskTexts[i]!);
+		}
+	}
 	const results = await mapConcurrent(tasks, MAX_CONCURRENCY, async (t, i) => {
 		const overrideSkills = skillOverrides[i];
 		const effectiveSkills = overrideSkills === undefined ? behaviors[i]?.skills : overrideSkills;
@@ -641,7 +670,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			const asyncCtx = { pi: deps.pi, cwd: ctx.cwd, currentSessionId: deps.state.currentSessionId! };
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
-				task,
+				task: params.context === "fork" ? wrapForkTask(task) : task,
 				agentConfig,
 				ctx: asyncCtx,
 				cwd: params.cwd,
@@ -657,6 +686,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		}
 	}
 
+	if (params.context === "fork") {
+		task = wrapForkTask(task);
+	}
 	const cleanTask = task;
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, params.cwd);
 	task = injectSingleOutputInstruction(task, outputPath);

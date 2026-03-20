@@ -27,6 +27,7 @@ import { createSubagentExecutor } from "./subagent-executor.js";
 import { createAsyncJobTracker } from "./async-job-tracker.js";
 import { createResultWatcher } from "./result-watcher.js";
 import { registerSlashCommands } from "./slash-commands.js";
+import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge.js";
 import {
 	type Details,
 	type ExtensionConfig,
@@ -138,6 +139,27 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		discoverAgents,
 	});
 
+	const promptTemplateBridge = registerPromptTemplateDelegationBridge({
+		events: pi.events,
+		getContext: () => state.lastUiContext,
+		execute: async (requestId, request, signal, ctx, onUpdate) =>
+			executor.execute(
+				requestId,
+				{
+					agent: request.agent,
+					task: request.task,
+					context: request.context,
+					cwd: request.cwd,
+					model: request.model,
+					async: false,
+					clarify: false,
+				},
+				signal,
+				onUpdate,
+				ctx,
+			),
+	});
+
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
 		label: "Subagent",
@@ -184,21 +206,20 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 			}
 			const isParallel = (args.tasks?.length ?? 0) > 0;
 			const asyncLabel = args.async === true && !isParallel ? theme.fg("warning", " [async]") : "";
-			const contextLabel = args.context === "fork" ? theme.fg("warning", " [fork]") : "";
 			if (args.chain?.length)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}${contextLabel}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}`,
 					0,
 					0,
 				);
 			if (isParallel)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${args.tasks!.length})${contextLabel}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${args.tasks!.length})`,
 					0,
 					0,
 				);
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}${contextLabel}`,
+				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
 				0,
 				0,
 			);
@@ -332,6 +353,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 	const resetSessionState = (ctx: ExtensionContext) => {
 		state.baseCwd = ctx.cwd;
 		state.currentSessionId = ctx.sessionManager.getSessionFile() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
 		resetJobs(ctx);
 	};
@@ -354,6 +376,8 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		}
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
+		promptTemplateBridge.cancelAll();
+		promptTemplateBridge.dispose();
 		if (state.lastUiContext?.hasUI) {
 			state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
 		}

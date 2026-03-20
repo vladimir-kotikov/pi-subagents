@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-03-20
+
+### Added
+- Added fork context preamble: tasks run with `context: "fork"` are now wrapped with a default preamble that anchors the subagent to its task, preventing it from continuing the parent conversation. The default is `DEFAULT_FORK_PREAMBLE` in `types.ts`. Internal/programmatic callers can use `wrapForkTask(task, false)` to disable it or pass a custom string (this is not exposed as a tool parameter).
+- Added a prompt-template delegation bridge (`prompt-template-bridge.ts`) on the shared extension event bus. The subagent extension now listens for `prompt-template:subagent:request` and emits correlated `started`/`response`/`update` events, with cwd safety checks and race-safe cancellation handling.
+- Added delegated progress streaming via `prompt-template:subagent:update`, mapped from subagent executor `onUpdate` progress payloads.
+
+### Changed
+- Session lifecycle reset now preserves the latest extension context for event-bus delegated runs.
+- `[fork]` badge is now shown only on the result row, not duplicated on both the tool-call and result rows.
+
 ## [0.11.4] - 2026-03-19
 
 ### Added
