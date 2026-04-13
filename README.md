@@ -14,12 +14,6 @@ https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
 pi install npm:pi-subagents
 ```
 
-To remove:
-
-```bash
-npx pi-subagents --remove
-```
-
 If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can wrap subagent delegation in a slash command:
 
 ```markdown
