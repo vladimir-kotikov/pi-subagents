@@ -29,6 +29,17 @@ if (available) {
 
 const EXTENSION = path.resolve("index.ts");
 
+async function createCompatibleTestSession(createTestSession: (options: Record<string, unknown>) => Promise<any>, options: Record<string, unknown>) {
+	const session = await createTestSession(options);
+	const agent = session.session?.agent as { setTools?: unknown; state?: { tools?: unknown } } | undefined;
+	if (agent && typeof agent.setTools !== "function" && agent.state) {
+		agent.setTools = (tools: unknown) => {
+			agent.state!.tools = tools;
+		};
+	}
+	return session;
+}
+
 /**
  * Write test agent definitions as .md files with YAML frontmatter.
  * Agent discovery only reads .md files, not .yaml.
@@ -61,7 +72,7 @@ describe("subagent tool — management", { skip: !available ? "pi-test-harness n
 	});
 
 	it("action: list returns discovered agents (project scope)", async () => {
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: {
 				bash: "ok",
@@ -92,7 +103,7 @@ describe("subagent tool — management", { skip: !available ? "pi-test-harness n
 	});
 
 	it("action: get returns agent detail", async () => {
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
@@ -123,7 +134,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 	});
 
 	it("rejects invalid action", async () => {
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
@@ -142,7 +153,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 	});
 
 	it("rejects ambiguous mode (both agent+task and chain)", async () => {
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
@@ -165,7 +176,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 	});
 
 	it("rejects unknown agent in single mode", async () => {
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
@@ -184,7 +195,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 	});
 
 	it("rejects chain with unknown agent", async () => {
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
@@ -211,7 +222,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 	});
 
 	it("rejects empty chain", async () => {
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
@@ -241,7 +252,7 @@ describe("subagent tool — single execution", { skip: !available ? "pi-test-har
 	it("executes single agent and returns output", async () => {
 		mockPi?.onCall({ output: "Hello from the subagent!" });
 
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
@@ -264,7 +275,7 @@ describe("subagent tool — single execution", { skip: !available ? "pi-test-har
 	it("returns error for failed agent", async () => {
 		mockPi?.onCall({ exitCode: 1, stderr: "Agent crashed hard" });
 
-		t = await createTestSession({
+		t = await createCompatibleTestSession(createTestSession, {
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});

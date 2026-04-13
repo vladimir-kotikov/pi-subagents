@@ -53,6 +53,7 @@ interface SubagentRunConfig {
 	asyncDir: string;
 	sessionId?: string | null;
 	piPackageRoot?: string;
+	piArgv1?: string;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 }
@@ -156,12 +157,16 @@ function runPiStreaming(
 	outputFile: string,
 	env?: Record<string, string | undefined>,
 	piPackageRoot?: string,
+	piArgv1?: string,
 	maxSubagentDepth?: number,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
 		const spawnEnv = { ...process.env, ...(env ?? {}), ...getSubagentDepthEnv(maxSubagentDepth) };
-		const spawnSpec = getPiSpawnCommand(args, piPackageRoot ? { piPackageRoot } : undefined);
+		const spawnSpec = getPiSpawnCommand(args, {
+			...(piPackageRoot ? { piPackageRoot } : {}),
+			...(piArgv1 ? { argv1: piArgv1 } : {}),
+		});
 		const child = spawn(spawnSpec.command, spawnSpec.args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: spawnEnv });
 		let stdout = "";
 		let stderr = "";
@@ -340,6 +345,7 @@ interface SingleStepContext {
 	flatStepCount: number;
 	outputFile: string;
 	piPackageRoot?: string;
+	piArgv1?: string;
 }
 
 /** Run a single pi agent step, returning output and metadata */
@@ -401,7 +407,7 @@ async function runSingleStep(
 			promptFileStem: step.agent,
 		});
 		const outputFile = index === 0 ? ctx.outputFile : `${ctx.outputFile}.attempt-${index + 1}`;
-		const run = await runPiStreaming(args, step.cwd ?? ctx.cwd, outputFile, env, ctx.piPackageRoot, step.maxSubagentDepth);
+		const run = await runPiStreaming(args, step.cwd ?? ctx.cwd, outputFile, env, ctx.piPackageRoot, ctx.piArgv1, step.maxSubagentDepth);
 		cleanupTempDir(tempDir);
 
 		const parsed = parseRunOutput(run.stdout);
@@ -759,6 +765,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							flatIndex: fi, flatStepCount: flatSteps.length,
 							outputFile: path.join(asyncDir, `output-${fi}.log`),
 							piPackageRoot: config.piPackageRoot,
+							piArgv1: config.piArgv1,
 						});
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
@@ -879,6 +886,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				flatIndex, flatStepCount: flatSteps.length,
 				outputFile: path.join(asyncDir, `output-${flatIndex}.log`),
 				piPackageRoot: config.piPackageRoot,
+				piArgv1: config.piArgv1,
 			});
 			if (seqStep.sessionFile) {
 				latestSessionFile = seqStep.sessionFile;
