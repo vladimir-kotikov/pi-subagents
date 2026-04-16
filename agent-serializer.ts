@@ -8,6 +8,9 @@ export const KNOWN_FIELDS = new Set([
 	"model",
 	"fallbackModels",
 	"thinking",
+	"systemPromptMode",
+	"inheritProjectContext",
+	"inheritSkills",
 	"skill",
 	"skills",
 	"extensions",
@@ -40,6 +43,9 @@ export function serializeAgent(config: AgentConfig): string {
 	const fallbackModelsValue = joinComma(config.fallbackModels);
 	if (fallbackModelsValue) lines.push(`fallbackModels: ${fallbackModelsValue}`);
 	if (config.thinking && config.thinking !== "off") lines.push(`thinking: ${config.thinking}`);
+	lines.push(`systemPromptMode: ${config.systemPromptMode}`);
+	lines.push(`inheritProjectContext: ${config.inheritProjectContext ? "true" : "false"}`);
+	lines.push(`inheritSkills: ${config.inheritSkills ? "true" : "false"}`);
 
 	const skillsValue = joinComma(config.skills);
 	if (skillsValue) lines.push(`skills: ${skillsValue}`);

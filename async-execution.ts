@@ -200,7 +200,7 @@ export function executeAsyncChain(
 		const skillCwd = s.cwd ?? cwd ?? ctx.cwd;
 		const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, skillCwd, ctx.cwd);
 
-		let systemPrompt = a.systemPrompt?.trim() || null;
+		let systemPrompt = a.systemPrompt?.trim() ?? "";
 		if (resolvedSkills.length > 0) {
 			const injection = buildSkillInjection(resolvedSkills);
 			systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
@@ -222,6 +222,9 @@ export function executeAsyncChain(
 			extensions: a.extensions,
 			mcpDirectTools: a.mcpDirectTools,
 			systemPrompt,
+			systemPromptMode: a.systemPromptMode,
+			inheritProjectContext: a.inheritProjectContext,
+			inheritSkills: a.inheritSkills,
 			skills: resolvedSkills.map((r) => r.name),
 			outputPath,
 			sessionFile,
@@ -344,7 +347,7 @@ export function executeAsyncSingle(
 	const availableModels = params.availableModels;
 	const skillCwd = cwd ?? ctx.cwd;
 	const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, skillCwd, ctx.cwd);
-	let systemPrompt = agentConfig.systemPrompt?.trim() || null;
+	let systemPrompt = agentConfig.systemPrompt?.trim() ?? "";
 	if (resolvedSkills.length > 0) {
 		const injection = buildSkillInjection(resolvedSkills);
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
@@ -383,6 +386,9 @@ export function executeAsyncSingle(
 						extensions: agentConfig.extensions,
 						mcpDirectTools: agentConfig.mcpDirectTools,
 						systemPrompt,
+						systemPromptMode: agentConfig.systemPromptMode,
+						inheritProjectContext: agentConfig.inheritProjectContext,
+						inheritSkills: agentConfig.inheritSkills,
 						skills: resolvedSkills.map((r) => r.name),
 						outputPath,
 						sessionFile,

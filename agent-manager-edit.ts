@@ -1,6 +1,6 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
-import type { AgentConfig, BuiltinAgentOverrideBase } from "./agents.ts";
+import { defaultSystemPromptMode, type AgentConfig, type BuiltinAgentOverrideBase } from "./agents.ts";
 import { createEditorState, ensureCursorVisible, getCursorDisplayPos, handleEditorInput, renderEditor, wrapText } from "./text-editor.ts";
 import type { TextEditorState } from "./text-editor.ts";
 import { pad, row, renderHeader, renderFooter, formatScrollInfo } from "./render-helpers.ts";
@@ -26,7 +26,7 @@ export interface CreateEditStateOptions {
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-const FIELD_ORDER = ["name", "description", "model", "fallbackModels", "thinking", "tools", "extensions", "skills", "output", "reads", "progress", "interactive", "prompt"] as const;
+const FIELD_ORDER = ["name", "description", "model", "fallbackModels", "thinking", "systemPromptMode", "inheritProjectContext", "inheritSkills", "tools", "extensions", "skills", "output", "reads", "progress", "interactive", "prompt"] as const;
 type ThinkingLevel = typeof THINKING_LEVELS[number];
 const PROMPT_VIEWPORT_HEIGHT = 16;
 const MODEL_SELECTOR_HEIGHT = 10;
@@ -45,6 +45,9 @@ function fieldValueMatchesBase(field: EditField, state: EditState): boolean {
 		case "model": return state.draft.model === base.model;
 		case "fallbackModels": return arraysEqual(state.draft.fallbackModels, base.fallbackModels);
 		case "thinking": return state.draft.thinking === base.thinking;
+		case "systemPromptMode": return state.draft.systemPromptMode === base.systemPromptMode;
+		case "inheritProjectContext": return state.draft.inheritProjectContext === base.inheritProjectContext;
+		case "inheritSkills": return state.draft.inheritSkills === base.inheritSkills;
 		case "tools": return arraysEqual(toolList(state.draft), toolList(base));
 		case "skills": return arraysEqual(state.draft.skills, base.skills);
 		case "prompt": return state.draft.systemPrompt === base.systemPrompt;
@@ -59,6 +62,9 @@ function resetFieldToBase(field: EditField, state: EditState): void {
 		case "model": state.draft.model = base.model; break;
 		case "fallbackModels": state.draft.fallbackModels = base.fallbackModels ? [...base.fallbackModels] : undefined; break;
 		case "thinking": state.draft.thinking = base.thinking; break;
+		case "systemPromptMode": state.draft.systemPromptMode = base.systemPromptMode; break;
+		case "inheritProjectContext": state.draft.inheritProjectContext = base.inheritProjectContext; break;
+		case "inheritSkills": state.draft.inheritSkills = base.inheritSkills; break;
 		case "tools": state.draft.tools = base.tools ? [...base.tools] : undefined; state.draft.mcpDirectTools = base.mcpDirectTools ? [...base.mcpDirectTools] : undefined; break;
 		case "skills": state.draft.skills = base.skills ? [...base.skills] : undefined; break;
 		case "prompt": state.draft.systemPrompt = base.systemPrompt; state.promptEditor = createEditorState(base.systemPrompt); break;
@@ -83,6 +89,9 @@ function renderFieldValue(field: EditField, state: EditState): string {
 		case "model": return draft.model ?? "default";
 		case "fallbackModels": return draft.fallbackModels && draft.fallbackModels.length > 0 ? draft.fallbackModels.join(", ") : "";
 		case "thinking": return draft.thinking ?? "off";
+		case "systemPromptMode": return draft.systemPromptMode ?? defaultSystemPromptMode(draft.name);
+		case "inheritProjectContext": return draft.inheritProjectContext ? "on" : "off";
+		case "inheritSkills": return draft.inheritSkills ? "on" : "off";
 		case "tools": return formatTools(draft);
 		case "extensions": return draft.extensions !== undefined ? (draft.extensions.length > 0 ? draft.extensions.join(", ") : "") : "(all)";
 		case "skills": return draft.skills && draft.skills.length > 0 ? draft.skills.join(", ") : "";
@@ -101,12 +110,28 @@ function applyFieldValue(field: EditField, state: EditState, value: string): voi
 		case "description": draft.description = value.trim(); break;
 		case "model": draft.model = value.trim() || undefined; break;
 		case "fallbackModels": draft.fallbackModels = parseCommaList(value); break;
+		case "systemPromptMode": {
+			const trimmed = value.trim();
+			if (trimmed === "") {
+				draft.systemPromptMode = defaultSystemPromptMode(draft.name);
+				break;
+			}
+			if (trimmed === "append" || trimmed === "replace") {
+				draft.systemPromptMode = trimmed;
+			}
+			break;
+		}
 		case "tools": { const parsed = parseTools(value); draft.tools = parsed.tools; draft.mcpDirectTools = parsed.mcp; break; }
 		case "extensions": { const trimmed = value.trim(); draft.extensions = trimmed === "(all)" ? undefined : parseCommaList(trimmed) ?? []; break; }
 		case "skills": draft.skills = parseCommaList(value); break;
 		case "output": { const trimmed = value.trim(); draft.output = trimmed.length > 0 ? trimmed : undefined; break; }
 		case "reads": draft.defaultReads = parseCommaList(value); break;
-		case "progress": case "interactive": case "prompt": break;
+		case "inheritProjectContext":
+		case "inheritSkills":
+		case "progress":
+		case "interactive":
+		case "prompt":
+			break;
 	}
 }
 
@@ -231,13 +256,19 @@ export function handleEditInput(screen: EditScreen, state: EditState, data: stri
 		if (data === "m") { openModelPicker(state, models); return { nextScreen: "edit-field" }; }
 		if (data === "t") { openThinkingPicker(state); return { nextScreen: "edit-field" }; }
 		if (data === "s") { openSkillPicker(state, skills); return { nextScreen: "edit-field" }; }
-		if (data === " " && (field === "progress" || field === "interactive")) { if (field === "progress") state.draft.defaultProgress = !state.draft.defaultProgress; if (field === "interactive") state.draft.interactive = !state.draft.interactive; return; }
+		if (data === " " && (field === "inheritProjectContext" || field === "inheritSkills" || field === "progress" || field === "interactive")) {
+			if (field === "inheritProjectContext") state.draft.inheritProjectContext = !state.draft.inheritProjectContext;
+			if (field === "inheritSkills") state.draft.inheritSkills = !state.draft.inheritSkills;
+			if (field === "progress") state.draft.defaultProgress = !state.draft.defaultProgress;
+			if (field === "interactive") state.draft.interactive = !state.draft.interactive;
+			return;
+		}
 		if (matchesKey(data, "return")) {
 			if (field === "model") { openModelPicker(state, models); return { nextScreen: "edit-field" }; }
 			if (field === "thinking") { openThinkingPicker(state); return { nextScreen: "edit-field" }; }
 			if (field === "skills") { openSkillPicker(state, skills); return { nextScreen: "edit-field" }; }
 			if (field === "prompt") { state.promptEditor = createEditorState(state.draft.systemPrompt ?? ""); return { nextScreen: "edit-prompt" }; }
-			if (field === "progress" || field === "interactive") return;
+			if (field === "inheritProjectContext" || field === "inheritSkills" || field === "progress" || field === "interactive") return;
 			state.fieldMode = "text"; state.fieldEditor = createEditorState(renderFieldValue(field, state)); return { nextScreen: "edit-field" };
 		}
 		return;
@@ -304,8 +335,17 @@ export function renderEdit(screen: EditScreen, state: EditState, width: number, 
 	for (let i = 0; i < state.fields.length; i++) {
 		const field = state.fields[i]!; if (field === "prompt") break;
 		const isFocused = i === state.fieldIndex; const prefix = isFocused ? theme.fg("accent", "▸ ") : "  ";
-		const rawLabel = pad(`${field[0]!.toUpperCase()}${field.slice(1)}:`, labelWidth);
+		const fieldLabel = field === "systemPromptMode"
+			? "Prompt Mode"
+			: field === "inheritProjectContext"
+				? "Project Ctx"
+				: field === "inheritSkills"
+					? "Skills Ctx"
+					: `${field[0]!.toUpperCase()}${field.slice(1)}`;
+		const rawLabel = pad(`${fieldLabel}:`, labelWidth);
 		const labelText = state.overrideBase && !fieldValueMatchesBase(field, state) ? theme.fg("accent", rawLabel) : rawLabel; let valueText = renderFieldValue(field, state);
+		if (field === "inheritProjectContext") { const toggle = state.draft.inheritProjectContext ? theme.fg("success", "[x]") : "[ ]"; valueText = `${toggle} ${state.draft.inheritProjectContext ? "on" : "off"}`; lines.push(row(` ${prefix}${labelText} ${pad(truncateToWidth(valueText, valueWidth), valueWidth)}`, width, theme)); continue; }
+		if (field === "inheritSkills") { const toggle = state.draft.inheritSkills ? theme.fg("success", "[x]") : "[ ]"; valueText = `${toggle} ${state.draft.inheritSkills ? "on" : "off"}`; lines.push(row(` ${prefix}${labelText} ${pad(truncateToWidth(valueText, valueWidth), valueWidth)}`, width, theme)); continue; }
 		if (field === "progress") { const toggle = state.draft.defaultProgress ? theme.fg("success", "[x]") : "[ ]"; valueText = `${toggle} ${state.draft.defaultProgress ? "on" : "off"}`; lines.push(row(` ${prefix}${labelText} ${pad(truncateToWidth(valueText, valueWidth), valueWidth)}`, width, theme)); continue; }
 		if (field === "interactive") { const toggle = state.draft.interactive ? theme.fg("success", "[x]") : "[ ]"; valueText = `${toggle} ${state.draft.interactive ? "on" : "off"}`; lines.push(row(` ${prefix}${labelText} ${pad(truncateToWidth(valueText, valueWidth), valueWidth)}`, width, theme)); continue; }
 		let displayValue = truncateToWidth(valueText, valueWidth);

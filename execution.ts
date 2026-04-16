@@ -72,7 +72,6 @@ async function runSingleAttempt(
 	shared: {
 		sessionEnabled: boolean;
 		systemPrompt: string;
-		skillNames: string[];
 		resolvedSkillNames?: string[];
 		skillsWarning?: string;
 		jsonlPath?: string;
@@ -89,9 +88,11 @@ async function runSingleAttempt(
 		sessionFile: options.sessionFile,
 		model,
 		thinking: agent.thinking,
+		systemPromptMode: agent.systemPromptMode,
+		inheritProjectContext: agent.inheritProjectContext,
+		inheritSkills: agent.inheritSkills,
 		tools: agent.tools,
 		extensions: agent.extensions,
-		skills: shared.skillNames,
 		systemPrompt: shared.systemPrompt,
 		mcpDirectTools: agent.mcpDirectTools,
 		promptFileStem: agent.name,
@@ -413,7 +414,6 @@ export async function runSync(
 		const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
 			sessionEnabled,
 			systemPrompt,
-			skillNames,
 			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
 			skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
 			jsonlPath,

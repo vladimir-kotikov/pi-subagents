@@ -51,9 +51,43 @@ You can also override selected builtin fields without copying the whole agent. B
 - User scope: `~/.pi/agent/settings.json`
 - Project scope: `.pi/settings.json`
 
-Supported builtin override fields are `model`, `fallbackModels`, `thinking`, `skills`, `tools`, and `systemPrompt`. Project overrides beat user overrides. In `/agents`, press `e` on a builtin to create or edit its override. Overridden builtins show badges like `[builtin+user]` or `[builtin+project]`.
+Supported builtin override fields are `model`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `skills`, `tools`, and `systemPrompt`. Project overrides beat user overrides.
+
+**Overriding builtin defaults:**
+
+All builtin agents inherit project instruction files (`AGENTS.md`, `CLAUDE.md`, etc.) by default. To make a builtin agent run without those project instructions:
+
+**Via settings file** — add to `~/.pi/agent/settings.json` (user scope) or `.pi/settings.json` (project scope):
+```json
+{
+  "subagents": {
+    "agentOverrides": {
+      "reviewer": {
+        "inheritProjectContext": false
+      }
+    }
+  }
+}
+```
+
+**Via `/agents` UI** — press `e` on any builtin agent (like `reviewer`), then toggle `inheritProjectContext` to `false` and save. This creates an override that you can edit or remove later without modifying the builtin definition itself.
+
+Overridden builtins show badges like `[builtin+user]` or `[builtin+project]` to indicate they have customizations applied.
 
 > **Note:** The `researcher` agent uses `web_search`, `fetch_content`, and `get_search_content` tools which require the [pi-web-access](https://github.com/nicobailon/pi-web-access) extension. Install it with `pi install npm:pi-web-access`.
+
+### Prompt Assembly Philosophy
+
+Subagents are designed to be **narrow and intentional**. Custom subagents default to seeing only what you explicitly give them — not Pi's entire base prompt, not your repo's `AGENTS.md`, and not the parent's discovered skills.
+
+This prevents subtle bugs where a "simple" code review agent starts making decisions based on project architecture rules it shouldn't know about, or a focused research agent gets distracted by tool descriptions meant for the orchestrator.
+
+Use inheritance flags to selectively add back context when you actually want it:
+- **`inheritProjectContext: true`** — Keep Pi's inherited project-instructions block from project-level files like `AGENTS.md` and `CLAUDE.md`
+- **`inheritSkills: true`** — Let the child use Pi's discovered skills catalog
+- **`systemPromptMode: append`** — Add the agent's prompt to Pi's base instead of replacing it
+
+Builtin agents ship a little differently: they all inherit project instruction files by default so they follow repo-specific rules out of the box. `delegate` is still the exception for `systemPromptMode` — it stays on `append` because its job is orchestration within the parent workflow, not isolated task execution.
 
 **Agent frontmatter:**
 
@@ -66,6 +100,9 @@ extensions:                 # absent=all, empty=none, csv=allowlist
 model: claude-haiku-4-5
 fallbackModels: openai/gpt-5-mini, anthropic/claude-sonnet-4  # optional ordered fallbacks
 thinking: high               # off, minimal, low, medium, high, xhigh
+systemPromptMode: replace    # replace by default, except builtin delegate
+inheritProjectContext: false # custom agents default false; builtins opt into true
+inheritSkills: false         # strip Pi's discovered skills section
 skill: safe-bash, chrome-devtools  # comma-separated skills to inject
 output: context.md           # writes to {chain_dir}/context.md
 defaultReads: context.md     # comma-separated files to read
@@ -81,9 +118,50 @@ The `thinking` field sets a default extended thinking level for the agent. At ru
 
 `fallbackModels` is an optional ordered list of backup models to try when the primary model fails with a provider/model-style error such as quota, auth, timeout, or provider/model unavailable. In markdown frontmatter, declare it as a comma-separated string. In management `config` objects, you can pass either a comma-separated string or a string array.
 
+`systemPromptMode` — How the agent markdown body is passed to Pi:
+- **`replace`** (default) — The agent's markdown body becomes the system prompt. Clean slate, no Pi base prompt baggage.
+- **`append`** — The agent's prompt is appended to Pi's normal base prompt. Use this when you want Pi's full capabilities plus your extra instructions.
+
+`inheritProjectContext` — Whether the child keeps Pi's inherited project-instructions block, built from project-level instruction files like `AGENTS.md` and `CLAUDE.md`:
+- **`false`** (default) — Strip those inherited project-level instructions from the child's final system prompt. This does not remove repo access, cwd, tools, or the task itself; it only removes those inherited instructions.
+- **`true`** — Keep those inherited project-level instructions. Use for specialists that should follow project-specific constraints and conventions.
+
+`inheritSkills` — Whether the child keeps Pi's discovered skills section:
+- **`false`** (default) — Skills catalog is stripped. Good for focused agents that shouldn't browse unrelated skills.
+- **`true`** — Child sees the full skills list. Use for general-purpose assistants that might need varied tools.
+
+The `skills` field still works independently — it injects specific skills directly into the agent prompt regardless of `inheritSkills`.
+
+**Common Recipes**
+
+| Goal | `systemPromptMode` | `inheritProjectContext` | `inheritSkills` |
+|------|-------------------|------------------------|-----------------|
+| Fully isolated specialist (custom-agent default) | `replace` | `false` | `false` |
+| Specialist that should follow project instruction files | `replace` | `true` | `false` |
+| Pi-plus-extensions | `append` | `true` | `true` |
+
+- **Security auditor**: Fully isolated so it objectively checks for vulnerabilities without being biased by project conventions.
+- **Architecture planner**: Repo-aware so it respects `AGENTS.md` constraints when making design decisions.
+- **Generic helper**: Append mode with full inheritance so it behaves like a slightly-customized Pi.
+
 Fallback resolution follows the same conservative model lookup as normal execution. Explicit `provider/model` values are used as-is. Bare model IDs first prefer the current session provider when that provider actually exposes the model, then fall back to a unique registry match. If a bare ID is still ambiguous, it stays bare.
 
 Fallback is only used for provider/model availability failures. Ordinary task failures such as bad `bash` commands, missing files, or other tool/runtime errors do not trigger a model hop.
+
+**Tool selection semantics**
+
+The `tools` field controls builtin-tool allowlisting and a couple of related extension behaviors:
+
+- `tools` **omitted** → `pi-subagents` does not pass `--tools`, so the child gets Pi's normal default builtin tools.
+- `tools` **present** → listed builtin tool names become an explicit allowlist passed via `--tools`.
+- `mcp:...` entries are split out of `tools` and forwarded as direct MCP tool selections.
+- Path-like entries in `tools` (extension paths or file paths ending in `.ts` / `.js`) are treated as tool-extension paths, not builtin tool names.
+
+This means:
+
+- `tools` omitted + `extensions` omitted → child gets Pi's normal builtin tools and normal extension set.
+- `tools: mcp:chrome-devtools` → child still gets Pi's default builtin tools, plus direct MCP tools from `chrome-devtools`.
+- `tools: read, bash, mcp:chrome-devtools` → child is restricted to `read` and `bash` for builtin tools, plus direct MCP tools from `chrome-devtools`.
 
 **Extension sandboxing**
 
@@ -229,7 +307,7 @@ Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — 
 |--------|-------------|
 | List | Browse all agents and chains with search/filter, scope badges, chain badges |
 | Detail | View resolved prompt, frontmatter fields, recent run history, and active builtin override path |
-| Edit | Edit fields with specialized pickers (model, thinking, skills, prompt editor) |
+| Edit | Edit fields with specialized pickers and toggles (model, thinking, prompt mode, inherited context, inherited skills, prompt editor) |
 | Chain Detail | View chain steps with flow visualization and dependency map |
 | Parallel Builder | Build parallel execution slots, add same agent multiple times, per-slot task overrides |
 | Task Input | Enter task and launch with optional skip-clarify toggle |
@@ -573,6 +651,9 @@ Agent definitions are not loaded into LLM context by default. Management actions
   description: "Scans codebases for patterns and issues",
   scope: "user",
   systemPrompt: "You are a code scout...",
+  systemPromptMode: "replace",
+  inheritProjectContext: false,
+  inheritSkills: false,
   model: "anthropic/claude-sonnet-4",
   fallbackModels: ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
   tools: "read, bash, mcp:github/search_repositories",
@@ -613,7 +694,7 @@ Agent definitions are not loaded into LLM context by default. Management actions
 Notes:
 - `create` uses `config.scope` (`"user"` or `"project"`), not `agentScope`.
 - `update`/`delete` use `agentScope` only for scope disambiguation when the same name exists in both scopes.
-- Agent config mapping: `reads -> defaultReads`, `progress -> defaultProgress`, `extensions` controls extension sandboxing, `maxSubagentDepth` maps directly to agent frontmatter, `fallbackModels` maps directly to agent frontmatter, and `tools` supports `mcp:` entries that map to direct MCP tools.
+- Agent config mapping: `reads -> defaultReads`, `progress -> defaultProgress`, `extensions` controls extension sandboxing, `maxSubagentDepth`, `fallbackModels`, `systemPromptMode`, `inheritProjectContext`, and `inheritSkills` map directly to agent frontmatter, and `tools` supports `mcp:` entries that map to direct MCP tools.
 - To clear any optional field, set it to `false` or `""` (e.g., `{ model: false }` or `{ skills: "" }`). Both work for all string-typed fields.
 
 ## Parameters
@@ -624,7 +705,7 @@ Notes:
 | `task` | string | - | Task string (single mode) |
 | `action` | string | - | Management action: `list`, `get`, `create`, `update`, `delete` |
 | `chainName` | string | - | Chain name for management get/update/delete |
-| `config` | object | - | Agent or chain config for management create/update. Agent configs also accept `fallbackModels` (comma-separated string or string array). |
+| `config` | object | - | Agent or chain config for management create/update. Agent configs also accept `fallbackModels` (comma-separated string or string array), `systemPromptMode` (`append` or `replace`), `inheritProjectContext` (boolean), and `inheritSkills` (boolean). |
 | `output` | `string \| false` | agent default | Override output file for single agent (absolute path as-is, relative path resolved against cwd) |
 | `skill` | `string \| string[] \| false` | agent default | Override skills (comma-separated string, array, or false to disable) |
 | `model` | string | agent default | Override model for single agent |

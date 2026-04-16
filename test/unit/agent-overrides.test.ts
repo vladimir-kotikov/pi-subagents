@@ -8,6 +8,7 @@ import { buildBuiltinOverrideConfig, discoverAgents, removeBuiltinAgentOverride 
 let tempHome = "";
 let tempProject = "";
 const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
 
 function writeJson(filePath: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -25,11 +26,14 @@ describe("builtin agent overrides", () => {
 		tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-home-"));
 		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-"));
 		process.env.HOME = tempHome;
+		process.env.USERPROFILE = tempHome;
 	});
 
 	afterEach(() => {
 		if (originalHome === undefined) delete process.env.HOME;
 		else process.env.HOME = originalHome;
+		if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = originalUserProfile;
 		fs.rmSync(tempHome, { recursive: true, force: true });
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
@@ -41,6 +45,9 @@ describe("builtin agent overrides", () => {
 					reviewer: {
 						model: "openai/gpt-5.4",
 						thinking: "xhigh",
+						systemPromptMode: "replace",
+						inheritProjectContext: true,
+						inheritSkills: true,
 					},
 				},
 			},
@@ -51,6 +58,9 @@ describe("builtin agent overrides", () => {
 		assert.equal(reviewer.source, "builtin");
 		assert.equal(reviewer.model, "openai/gpt-5.4");
 		assert.equal(reviewer.thinking, "xhigh");
+		assert.equal(reviewer.systemPromptMode, "replace");
+		assert.equal(reviewer.inheritProjectContext, true);
+		assert.equal(reviewer.inheritSkills, true);
 		assert.equal(reviewer.override?.scope, "user");
 		assert.equal(reviewer.override?.path, path.join(tempHome, ".pi", "agent", "settings.json"));
 	});
@@ -147,12 +157,36 @@ describe("builtin agent overrides", () => {
 		);
 	});
 
+	it("surfaces malformed builtin override entries instead of silently ignoring them", () => {
+		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
+		writeJson(settingsPath, {
+			subagents: {
+				agentOverrides: {
+					reviewer: {
+						inheritProjectContext: "true",
+					},
+				},
+			},
+		});
+
+		assert.throws(
+			() => discoverAgents(tempProject, "both"),
+			(error: unknown) => error instanceof Error
+				&& error.message.includes(settingsPath)
+				&& error.message.includes("reviewer")
+				&& error.message.includes("inheritProjectContext"),
+		);
+	});
+
 	it("builds false sentinels when an override clears builtin fields", () => {
 		const override = buildBuiltinOverrideConfig(
 			{
 				model: "openai-codex/gpt-5.4-mini",
 				fallbackModels: ["openai/gpt-5-mini"],
 				thinking: "high",
+				systemPromptMode: "append",
+				inheritProjectContext: true,
+				inheritSkills: false,
 				systemPrompt: "Base prompt",
 				skills: ["safe-bash"],
 				tools: ["bash"],
@@ -162,6 +196,9 @@ describe("builtin agent overrides", () => {
 				model: undefined,
 				fallbackModels: undefined,
 				thinking: undefined,
+				systemPromptMode: "replace",
+				inheritProjectContext: false,
+				inheritSkills: false,
 				systemPrompt: "Base prompt",
 				skills: undefined,
 				tools: undefined,
@@ -173,6 +210,8 @@ describe("builtin agent overrides", () => {
 			model: false,
 			fallbackModels: false,
 			thinking: false,
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
 			skills: false,
 			tools: false,
 		});
