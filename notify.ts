@@ -54,10 +54,11 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 			extra.push(`Session file: ${result.sessionFile}`);
 		}
 
+		const summary = result.summary.trim() ? result.summary : "(no output)";
 		const content = [
 			`Background task ${status}: **${agent}**${taskInfo}`,
 			"",
-			result.summary,
+			summary,
 			extra.length ? "" : undefined,
 			extra.length ? extra.join("\n") : undefined,
 		]
