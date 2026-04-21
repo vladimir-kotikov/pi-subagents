@@ -42,6 +42,7 @@ function defaultAssistantMessage(output) {
 			role: "assistant",
 			content: [{ type: "text", text: output }],
 			model: "mock/test-model",
+			stopReason: "stop",
 			usage: {
 				input: 100,
 				output: 50,

@@ -562,15 +562,24 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		});
 		const agents = makeAgentConfigs(["echo"]);
 
+		// Emit the detach request the moment we observe the intercom tool start
+		// in a progress update — this is the signal the parent has set
+		// `intercomStarted=true`. Using a fixed delay here races the mock's
+		// cold spawn and flakes under load.
+		let detachEmitted = false;
 		const runPromise = runSync(tempDir, agents, "echo", "Task", {
 			runId: "intercom-detach",
 			allowIntercomDetach: true,
 			intercomEvents: eventBus,
+			onUpdate: (update) => {
+				if (detachEmitted) return;
+				const progress = (update as { details?: { progress?: Array<{ currentTool?: string }> } }).details?.progress;
+				const sawIntercom = Array.isArray(progress) && progress.some((p) => p?.currentTool === "intercom");
+				if (!sawIntercom) return;
+				detachEmitted = true;
+				eventBus.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "test-request" });
+			},
 		});
-
-		setTimeout(() => {
-			eventBus.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "test-request" });
-		}, 100);
 
 		const result = await runPromise;
 
@@ -590,4 +599,5 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		assert.equal(result.exitCode, 0);
 	});
+
 });

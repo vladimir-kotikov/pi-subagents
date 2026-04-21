@@ -34,6 +34,7 @@ import {
 import { buildSkillInjection, resolveSkillsWithFallback } from "./skills.ts";
 import { getPiSpawnCommand } from "./pi-spawn.ts";
 import { createJsonlWriter } from "./jsonl-writer.ts";
+import { attachPostExitStdioGuard, trySignalChild } from "./post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import { captureSingleOutputSnapshot, resolveSingleOutput, type SingleOutputSnapshot } from "./single-output.ts";
 import {
@@ -188,6 +189,42 @@ async function runSingleAttempt(
 			finish(-2);
 		};
 
+		// If the child emits its final assistant message but never exits,
+		// start a bounded drain window and force termination if needed.
+		const FINAL_DRAIN_MS = 5000;
+		const HARD_KILL_MS = 3000;
+		let childExited = false;
+		let forcedTerminationSignal = false;
+		let finalDrainTimer: NodeJS.Timeout | undefined;
+		let finalHardKillTimer: NodeJS.Timeout | undefined;
+		const clearFinalDrainTimers = () => {
+			if (finalDrainTimer) {
+				clearTimeout(finalDrainTimer);
+				finalDrainTimer = undefined;
+			}
+			if (finalHardKillTimer) {
+				clearTimeout(finalHardKillTimer);
+				finalHardKillTimer = undefined;
+			}
+		};
+		const startFinalDrain = () => {
+			if (childExited || finalDrainTimer || settled || processClosed || detached) return;
+			finalDrainTimer = setTimeout(() => {
+				if (settled || processClosed || detached) return;
+				const termSent = trySignalChild(proc, "SIGTERM");
+				if (!termSent) return;
+				forcedTerminationSignal = true;
+				result.error = result.error
+					?? `Subagent process did not exit within ${FINAL_DRAIN_MS}ms after its final message. Forcing termination.`;
+				finalHardKillTimer = setTimeout(() => {
+					if (settled || processClosed || detached) return;
+					forcedTerminationSignal = trySignalChild(proc, "SIGKILL") || forcedTerminationSignal;
+				}, HARD_KILL_MS);
+				finalHardKillTimer.unref?.();
+			}, FINAL_DRAIN_MS);
+			finalDrainTimer.unref?.();
+		};
+
 		const unsubscribeIntercomDetach = options.intercomEvents?.on?.(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
 			if (!options.allowIntercomDetach || detached || processClosed) return;
 			if (!payload || typeof payload !== "object") return;
@@ -202,6 +239,8 @@ async function runSingleAttempt(
 		const finish = (code: number) => {
 			if (settled) return;
 			settled = true;
+			clearFinalDrainTimers();
+			clearStdioGuard();
 			unsubscribeIntercomDetach?.();
 			removeAbortListener?.();
 			resolve(code);
@@ -279,6 +318,13 @@ async function runSingleAttempt(
 					if (!result.model && evt.message.model) result.model = evt.message.model;
 					if (evt.message.errorMessage) result.error = evt.message.errorMessage;
 					appendRecentOutput(progress, extractTextFromContent(evt.message.content).split("\n").slice(-10));
+					// Final assistant message: start the exit drain window.
+					const stopReason = (evt.message as { stopReason?: string }).stopReason;
+					const hasToolCall = Array.isArray(evt.message.content)
+						&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
+					if (stopReason === "stop" && !hasToolCall) {
+						startFinalDrain();
+					}
 				}
 				fireUpdate();
 			}
@@ -292,6 +338,7 @@ async function runSingleAttempt(
 
 		let stderrBuf = "";
 
+		const clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
 		proc.stdout.on("data", (d) => {
 			buf += d.toString();
 			const lines = buf.split("\n");
@@ -301,7 +348,13 @@ async function runSingleAttempt(
 		proc.stderr.on("data", (d) => {
 			stderrBuf += d.toString();
 		});
-		proc.on("close", (code) => {
+		proc.on("exit", () => {
+			childExited = true;
+			clearFinalDrainTimers();
+		});
+		proc.on("close", (code, signal) => {
+			clearFinalDrainTimers();
+			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
 				// JSONL artifact flush is best effort.
 			});
@@ -315,9 +368,12 @@ async function runSingleAttempt(
 			if (code !== 0 && stderrBuf.trim() && !result.error) {
 				result.error = stderrBuf.trim();
 			}
-			finish(code ?? 0);
+			const finalCode = forcedTerminationSignal || signal ? (code ?? 1) : (code ?? 0);
+			finish(finalCode);
 		});
 		proc.on("error", (error) => {
+			clearFinalDrainTimers();
+			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
 				// JSONL artifact flush is best effort.
 			});
