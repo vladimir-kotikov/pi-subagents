@@ -34,7 +34,7 @@ import {
 import { buildSkillInjection, resolveSkillsWithFallback } from "./skills.ts";
 import { getPiSpawnCommand } from "./pi-spawn.ts";
 import { createJsonlWriter } from "./jsonl-writer.ts";
-import { attachPostExitStdioGuard } from "./post-exit-stdio-guard.ts";
+import { attachPostExitStdioGuard, trySignalChild } from "./post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import { captureSingleOutputSnapshot, resolveSingleOutput, type SingleOutputSnapshot } from "./single-output.ts";
 import {
@@ -179,16 +179,14 @@ async function runSingleAttempt(
 			if (childExited || finalDrainTimer || settled || processClosed || detached) return;
 			finalDrainTimer = setTimeout(() => {
 				if (settled || processClosed || detached) return;
+				const termSent = trySignalChild(proc, "SIGTERM");
+				if (!termSent) return;
+				forcedTerminationSignal = true;
 				result.error = result.error
 					?? `Subagent process did not exit within ${FINAL_DRAIN_MS}ms after its final message. Forcing termination.`;
-				try {
-					forcedTerminationSignal = proc.kill("SIGTERM");
-				} catch {}
 				finalHardKillTimer = setTimeout(() => {
 					if (settled || processClosed || detached) return;
-					try {
-						forcedTerminationSignal = proc.kill("SIGKILL") || forcedTerminationSignal;
-					} catch {}
+					forcedTerminationSignal = trySignalChild(proc, "SIGKILL") || forcedTerminationSignal;
 				}, HARD_KILL_MS);
 				finalHardKillTimer.unref?.();
 			}, FINAL_DRAIN_MS);

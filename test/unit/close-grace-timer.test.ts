@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { attachPostExitStdioGuard } from "../../post-exit-stdio-guard.ts";
+import { attachPostExitStdioGuard, trySignalChild } from "../../post-exit-stdio-guard.ts";
 
 function writeScript(name: string, lines: string[]): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-close-grace-"));
@@ -67,6 +67,12 @@ function runWithGuard(script: string, idleMs: number, hardMs: number, maxWaitMs:
 }
 
 describe("attachPostExitStdioGuard", () => {
+	it("reports whether a termination signal was actually delivered", () => {
+		assert.equal(trySignalChild({ kill: () => true }, "SIGTERM"), true);
+		assert.equal(trySignalChild({ kill: () => false }, "SIGTERM"), false);
+		assert.equal(trySignalChild({ kill: () => { throw new Error("gone"); } }, "SIGTERM"), false);
+	});
+
 	it("does not delay a clean exit", async () => {
 		const script = writeScript("clean.sh", ["#!/bin/bash", "set -eu", "echo hello", "exit 0"]);
 		const result = await runWithGuard(script, 2000, 8000, 5000);

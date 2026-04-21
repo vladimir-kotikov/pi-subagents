@@ -11,6 +11,18 @@ interface ChildWithPipedStdio {
 	on: ChildProcess["on"];
 }
 
+interface ChildWithKill {
+	kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+export function trySignalChild(child: ChildWithKill, signal: NodeJS.Signals): boolean {
+	try {
+		return child.kill(signal);
+	} catch {
+		return false;
+	}
+}
+
 export function attachPostExitStdioGuard(
 	child: ChildWithPipedStdio,
 	options: PostExitStdioGuardOptions,

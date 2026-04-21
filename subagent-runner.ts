@@ -28,7 +28,7 @@ import {
 } from "./parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import { formatModelAttemptNote, isRetryableModelFailure } from "./model-fallback.ts";
-import { attachPostExitStdioGuard } from "./post-exit-stdio-guard.ts";
+import { attachPostExitStdioGuard, trySignalChild } from "./post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "./utils.ts";
 import {
 	cleanupWorktrees,
@@ -312,17 +312,15 @@ function runPiStreaming(
 			if (childExited || finalDrainTimer || settled) return;
 			finalDrainTimer = setTimeout(() => {
 				if (settled) return;
+				const termSent = trySignalChild(child, "SIGTERM");
+				if (!termSent) return;
+				forcedTerminationSignal = true;
 				if (!error) {
 					error = `Subagent process did not exit within ${FINAL_DRAIN_MS}ms after its final message. Forcing termination.`;
 				}
-				try {
-					forcedTerminationSignal = child.kill("SIGTERM");
-				} catch {}
 				finalHardKillTimer = setTimeout(() => {
 					if (settled) return;
-					try {
-						forcedTerminationSignal = child.kill("SIGKILL") || forcedTerminationSignal;
-					} catch {}
+					forcedTerminationSignal = trySignalChild(child, "SIGKILL") || forcedTerminationSignal;
 				}, HARD_KILL_MS);
 				finalHardKillTimer.unref?.();
 			}, FINAL_DRAIN_MS);
