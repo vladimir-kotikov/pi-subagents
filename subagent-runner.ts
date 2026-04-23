@@ -95,6 +95,18 @@ function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 }
 
+function tokenUsageFromAttempts(attempts: ModelAttempt[] | undefined): TokenUsage | null {
+	if (!attempts || attempts.length === 0) return null;
+	let input = 0;
+	let output = 0;
+	for (const attempt of attempts) {
+		input += attempt.usage?.input ?? 0;
+		output += attempt.usage?.output ?? 0;
+	}
+	const total = input + output;
+	return total > 0 ? { input, output, total } : null;
+}
+
 interface ChildEventContext {
 	eventsPath: string;
 	runId: string;
@@ -944,24 +956,23 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 				flatIndex += group.parallel.length;
 
-				if (config.sessionDir) {
-					for (let t = 0; t < group.parallel.length; t++) {
-						const taskSessionDir = path.join(config.sessionDir, `parallel-${t}`);
-						const taskTokens = parseSessionTokens(taskSessionDir);
-						if (taskTokens) {
-							const fi = groupStartFlatIndex + t;
-							statusPayload.steps[fi].tokens = taskTokens;
-							previousCumulativeTokens = {
-								input: previousCumulativeTokens.input + taskTokens.input,
-								output: previousCumulativeTokens.output + taskTokens.output,
-								total: previousCumulativeTokens.total + taskTokens.total,
-							};
-						}
-					}
-					statusPayload.totalTokens = { ...previousCumulativeTokens };
-					statusPayload.lastUpdate = Date.now();
-					writeJson(statusPath, statusPayload);
+				for (let t = 0; t < group.parallel.length; t++) {
+					const fi = groupStartFlatIndex + t;
+					const sessionTokens = config.sessionDir
+						? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
+						: null;
+					const taskTokens = sessionTokens ?? tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
+					if (!taskTokens) continue;
+					statusPayload.steps[fi].tokens = taskTokens;
+					previousCumulativeTokens = {
+						input: previousCumulativeTokens.input + taskTokens.input,
+						output: previousCumulativeTokens.output + taskTokens.output,
+						total: previousCumulativeTokens.total + taskTokens.total,
+					};
 				}
+				statusPayload.totalTokens = { ...previousCumulativeTokens };
+				statusPayload.lastUpdate = Date.now();
+				writeJson(statusPath, statusPayload);
 
 				for (const pr of parallelResults) {
 					results.push({
@@ -1046,7 +1057,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			});
 
 			const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
-			const stepTokens: TokenUsage | null = cumulativeTokens
+			let stepTokens: TokenUsage | null = cumulativeTokens
 				? {
 						input: cumulativeTokens.input - previousCumulativeTokens.input,
 						output: cumulativeTokens.output - previousCumulativeTokens.output,
@@ -1055,6 +1066,15 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				: null;
 			if (cumulativeTokens) {
 				previousCumulativeTokens = cumulativeTokens;
+			} else {
+				stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
+				if (stepTokens) {
+					previousCumulativeTokens = {
+						input: previousCumulativeTokens.input + stepTokens.input,
+						output: previousCumulativeTokens.output + stepTokens.output,
+						total: previousCumulativeTokens.total + stepTokens.total,
+					};
+				}
 			}
 
 			const stepEndTime = Date.now();

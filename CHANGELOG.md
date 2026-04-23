@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Async/background status token reporting now falls back to in-memory model-attempt usage when detached runs do not produce session `.jsonl` files, which also preserves token totals across model fallback retries.
+
 ## [0.17.4] - 2026-04-22
 
 ### Added
