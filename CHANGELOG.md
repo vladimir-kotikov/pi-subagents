@@ -4,6 +4,7 @@
 
 ### Fixed
 - Async/background status token reporting now falls back to in-memory model-attempt usage when detached runs do not produce session `.jsonl` files, which also preserves token totals across model fallback retries.
+- Non-Windows subagent launches now use plain `pi` again instead of reusing the current CLI script path, avoiding runs that get confused by installed `dist/cli.js` entrypoints.
 
 ## [0.17.4] - 2026-04-22
 
