@@ -23,7 +23,7 @@ import {
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.ts";
 import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.ts";
 import { createForkContextResolver } from "./fork-context.ts";
-import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
+import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "./intercom-bridge.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "./utils.ts";
@@ -46,6 +46,7 @@ import {
 	type ControlEvent,
 	type Details,
 	type ExtensionConfig,
+	type IntercomEventBus,
 	type MaxOutputConfig,
 	type ResolvedControlConfig,
 	type SingleResult,
@@ -669,6 +670,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		task: params.task,
 		agents,
 		ctx,
+		intercomEvents: deps.pi.events,
 		signal,
 		runId,
 		cwd: effectiveCwd,
@@ -741,6 +743,7 @@ interface ForegroundParallelRunInput {
 	taskTexts: string[];
 	agents: AgentConfig[];
 	ctx: ExtensionContext;
+	intercomEvents: IntercomEventBus;
 	signal: AbortSignal;
 	runId: string;
 	sessionDirForIndex: (idx?: number) => string | undefined;
@@ -861,10 +864,13 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 				return true;
 			};
 		}
+		const agentConfig = input.agents.find((agent) => agent.name === task.agent);
 		return runSync(input.ctx.cwd, input.agents, task.agent, input.taskTexts[index]!, {
 			cwd: taskCwd,
 			signal: input.signal,
 			interruptSignal: interruptController.signal,
+			allowIntercomDetach: agentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
+			intercomEvents: input.intercomEvents,
 			runId: input.runId,
 			index,
 			sessionDir: input.sessionDirForIndex(index),
@@ -1096,6 +1102,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			taskTexts,
 			agents,
 			ctx,
+			intercomEvents: deps.pi.events,
 			signal,
 			runId,
 			sessionDirForIndex,
@@ -1345,7 +1352,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		cwd: effectiveCwd,
 		signal,
 		interruptSignal: interruptController.signal,
-		allowIntercomDetach: agentConfig.systemPrompt?.includes("Intercom orchestration channel:") === true,
+		allowIntercomDetach: agentConfig.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 		intercomEvents: deps.pi.events,
 		runId,
 		sessionDir: sessionDirForIndex(0),

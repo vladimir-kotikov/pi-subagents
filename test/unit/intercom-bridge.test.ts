@@ -179,7 +179,7 @@ describe("applyIntercomBridgeToAgent", () => {
 		mode: "always",
 		orchestratorTarget: "main",
 		extensionDir: "/Users/test/.pi/agent/extensions/pi-intercom",
-		instruction: "Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: \"ask\", to: \"main\", message: \"<question>\" })\n- Completion/update: intercom({ action: \"send\", to: \"main\", message: \"DONE: <summary>\" })",
+		instruction: "Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: \"ask\", to: \"main\", message: \"<question>\" })\n- Blocked/update: intercom({ action: \"send\", to: \"main\", message: \"UPDATE: <summary>\" })",
 	};
 
 	it("injects intercom tool and prompt instructions", () => {

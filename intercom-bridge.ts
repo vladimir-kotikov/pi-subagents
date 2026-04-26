@@ -8,14 +8,14 @@ const DEFAULT_INTERCOM_EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "
 const DEFAULT_INTERCOM_CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "intercom", "config.json");
 const DEFAULT_SUBAGENT_CONFIG_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent");
 const DEFAULT_INTERCOM_TARGET_PREFIX = "subagent-chat";
-const INTERCOM_BRIDGE_MARKER = "Intercom orchestration channel:";
+export const INTERCOM_BRIDGE_MARKER = "Intercom orchestration channel:";
 const DEFAULT_INTERCOM_BRIDGE_TEMPLATE = `The inherited thread is reference-only. Do not continue that conversation or send questions, status updates, or completion handoffs to the orchestrator in normal assistant text.
 
 Use intercom only for coordination with the orchestrator session "{orchestratorTarget}".
 - Need a decision or blocked: intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })
-- Need to report progress or a completion handoff: intercom({ action: "send", to: "{orchestratorTarget}", message: "DONE: <summary>" })
+- Blocked or explicitly asked to send progress: intercom({ action: "send", to: "{orchestratorTarget}", message: "UPDATE: <summary>" })
 
-If no upstream coordination is needed, continue the task normally and return a focused task result.`;
+Do not send routine completion handoffs through intercom. If no coordination is needed, return a focused task result.`;
 
 export interface IntercomBridgeState {
 	active: boolean;

@@ -977,9 +977,9 @@ The inherited thread is reference-only. Do not continue that conversation or sen
 Use `intercom` only to coordinate with the orchestrator session `{orchestratorTarget}`.
 
 - Need a decision or you're blocked: `intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })`
-- Need to report progress or a completion handoff: `intercom({ action: "send", to: "{orchestratorTarget}", message: "DONE: <summary>" })`
+- Blocked or explicitly asked to send progress: `intercom({ action: "send", to: "{orchestratorTarget}", message: "UPDATE: <summary>" })`
 
-If no upstream coordination is needed, continue the task normally and return a focused task result.
+Do not send routine completion handoffs through intercom. If no coordination is needed, return a focused task result.
 ```
 
 Bridge activation also requires all of the following:

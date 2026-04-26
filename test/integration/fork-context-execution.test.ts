@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
-import { createMockPi, createTempDir, events, removeTempDir, tryImport } from "../support/helpers.ts";
+import { createEventBus, createMockPi, createTempDir, events, removeTempDir, tryImport } from "../support/helpers.ts";
 import { discoverAgents } from "../../agents.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT } from "../../types.ts";
 
 interface ExecutorModule {
 	createSubagentExecutor?: (...args: unknown[]) => {
@@ -18,7 +19,7 @@ interface ExecutorModule {
 			isError?: boolean;
 			content: Array<{ text?: string }>;
 			details?: {
-				results?: Array<{ skills?: string[] }>;
+				results?: Array<{ detached?: boolean; exitCode?: number; skills?: string[] }>;
 			};
 		}>;
 	};
@@ -30,7 +31,7 @@ interface AsyncExecutionModule {
 
 interface ProgressUpdate {
 	details?: {
-		progress?: Array<{ status?: string }>;
+		progress?: Array<{ status?: string; currentTool?: string }>;
 	};
 }
 
@@ -131,9 +132,10 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 
 	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents, config: Record<string, unknown> = {}) {
 		let sessionName: string | undefined;
-		return createSubagentExecutor({
+		const eventsApi = createEventBus();
+		return Object.assign(createSubagentExecutor({
 			pi: {
-				events: { emit: () => {} },
+				events: eventsApi,
 				getSessionName: () => sessionName,
 				setSessionName: (name: string) => {
 					sessionName = name;
@@ -146,7 +148,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			getSubagentSessionRoot: () => tempDir,
 			expandTilde: (p: string) => p,
 			discoverAgents: discoverAgentsImpl,
-		});
+		}), { eventsApi });
 	}
 
 	function readCallArgs(): string[] {
@@ -540,6 +542,46 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			assert.equal(result.isError, undefined, testCase.name);
 			assert.equal(maxRunning, testCase.expectedMaxRunning, testCase.name);
 		}
+	});
+
+	it("detaches parallel child runs cleanly on intercom handoff", async () => {
+		mockPi.reset();
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("intercom", { action: "send", to: "orchestrator" })] },
+				{ delay: 1000, jsonl: [events.assistantMessage("after handoff")] },
+			],
+		});
+		mockPi.onCall({ output: "other done" });
+		const executor = makeExecutorWithDiscoverAgents(() => ({
+			agents: [
+				{ name: "echo", description: "Echo", systemPrompt: "Intercom orchestration channel:" },
+				{ name: "second", description: "Second" },
+			],
+			projectAgentsDir: null,
+		}));
+		let detachEmitted = false;
+		const result = await executor.execute(
+			"intercom-parallel",
+			{
+				tasks: [
+					{ agent: "echo", task: "send handoff" },
+					{ agent: "second", task: "continue" },
+				],
+			},
+			new AbortController().signal,
+			(update: ProgressUpdate) => {
+				if (detachEmitted) return;
+				if (!update.details?.progress?.some((entry) => entry.currentTool === "intercom")) return;
+				detachEmitted = true;
+				executor.eventsApi.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "parallel-detach" });
+			},
+			makeCtx(makeSessionManagerRecorder().manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.equal(detachEmitted, true);
+		assert.equal(result.details?.results?.some((entry) => entry.detached === true && entry.exitCode === 0), true);
 	});
 
 	it("runs top-level parallel async requests in the background", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {

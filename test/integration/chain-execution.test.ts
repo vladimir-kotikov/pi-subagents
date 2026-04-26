@@ -16,11 +16,14 @@ import type { MockPi } from "../support/helpers.ts";
 import {
 	createMockPi,
 	createTempDir,
+	createEventBus,
 	removeTempDir,
 	makeAgent,
 	makeMinimalCtx,
 	tryImport,
+	events,
 } from "../support/helpers.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT } from "../../types.ts";
 
 interface TestSequentialStep {
 	agent: string;
@@ -56,6 +59,7 @@ interface ChainResultItem {
 	agent: string;
 	exitCode: number;
 	finalOutput?: string;
+	detached?: boolean;
 	attemptedModels?: string[];
 	skills?: string[];
 }
@@ -487,6 +491,49 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 			synthTask.includes("=== Parallel Task 2 (reviewer-b) ==="),
 			"synthesizer should include reviewer-b output block",
 		);
+	});
+
+	it("detaches parallel chain children cleanly on intercom handoff", async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("intercom", { action: "send", to: "orchestrator" })] },
+				{ delay: 1000, jsonl: [events.assistantMessage("after handoff")] },
+			],
+		});
+		mockPi.onCall({ output: "Other task done" });
+		const agents = [
+			makeAgent("a", { systemPrompt: "Intercom orchestration channel:" }),
+			makeAgent("b", { systemPrompt: "Intercom orchestration channel:" }),
+		];
+		const intercomEvents = createEventBus();
+		let detachEmitted = false;
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{
+						parallel: [
+							{ agent: "a", task: "Send handoff" },
+							{ agent: "b", task: "Keep working" },
+						],
+					},
+				],
+				agents,
+				{
+					intercomEvents,
+					onUpdate(update: { details?: { progress?: Array<{ currentTool?: string }> } }) {
+						if (detachEmitted) return;
+						if (!update.details?.progress?.some((entry) => entry.currentTool === "intercom")) return;
+						detachEmitted = true;
+						intercomEvents.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "chain-parallel-detach" });
+					},
+				},
+			),
+		);
+
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
+		assert.equal(detachEmitted, true);
+		assert.equal(result.details.results.some((entry) => entry.detached === true && entry.exitCode === 0), true);
 	});
 
 	it("fails chain on parallel step failure", async () => {

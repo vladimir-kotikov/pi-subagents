@@ -17,12 +17,14 @@ import type { MockPi } from "../support/helpers.ts";
 import {
 	createMockPi,
 	createTempDir,
+	createEventBus,
 	removeTempDir,
 	makeAgentConfigs,
 	makeAgent,
 	events,
 	tryImport,
 } from "../support/helpers.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT } from "../../types.ts";
 
 interface ModelAttempt {
 	success?: boolean;
@@ -81,40 +83,12 @@ interface UtilsModule {
 	getFinalOutput(messages: unknown[]): string;
 }
 
-interface TypesModule {
-	INTERCOM_DETACH_REQUEST_EVENT: string;
-	INTERCOM_DETACH_RESPONSE_EVENT: string;
-}
-
 const execution = await tryImport<ExecutionModule>("./execution.ts");
 const utils = await tryImport<UtilsModule>("./utils.ts");
-const types = await tryImport<TypesModule>("./types.ts");
 const available = !!(execution && utils);
 
 const runSync = execution?.runSync;
 const getFinalOutput = utils?.getFinalOutput;
-const INTERCOM_DETACH_REQUEST_EVENT = types?.INTERCOM_DETACH_REQUEST_EVENT ?? "pi-intercom:detach-request";
-const INTERCOM_DETACH_RESPONSE_EVENT = types?.INTERCOM_DETACH_RESPONSE_EVENT ?? "pi-intercom:detach-response";
-
-function createEventBus() {
-	const listeners = new Map<string, Set<(payload: unknown) => void>>();
-	return {
-		on(channel: string, handler: (payload: unknown) => void) {
-			const channelListeners = listeners.get(channel) ?? new Set();
-			channelListeners.add(handler);
-			listeners.set(channel, channelListeners);
-			return () => {
-				channelListeners.delete(handler);
-				if (channelListeners.size === 0) listeners.delete(channel);
-			};
-		},
-		emit(channel: string, payload: unknown) {
-			for (const handler of listeners.get(channel) ?? []) {
-				handler(payload);
-			}
-		},
-	};
-}
 
 function writePackageSkill(packageRoot: string, skillName: string): void {
 	const skillDir = path.join(packageRoot, "skills", skillName);
@@ -620,6 +594,57 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.finalOutput, "Detached for intercom coordination.");
 		assert.equal(result.progress?.status, "detached");
 		assert.equal(accepted, true);
+	});
+
+	it("lets an active intercom child accept detach when another child is listening", async () => {
+		const eventBus = createEventBus();
+		let firstDetachResponse: boolean | undefined;
+		eventBus.on(INTERCOM_DETACH_RESPONSE_EVENT, (payload) => {
+			if (!payload || typeof payload !== "object") return;
+			if ((payload as { requestId?: unknown }).requestId !== "parallel-request") return;
+			firstDetachResponse ??= (payload as { accepted?: unknown }).accepted === true;
+		});
+		mockPi.onCall({ delay: 500, output: "quiet child done" });
+		const agents = makeAgentConfigs(["quiet", "intercom"]);
+
+		const quietRun = runSync(tempDir, agents, "quiet", "Quiet task", {
+			runId: "quiet-listener",
+			allowIntercomDetach: true,
+			intercomEvents: eventBus,
+		});
+		for (let attempt = 0; attempt < 50 && mockPi.callCount() < 1; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		assert.equal(mockPi.callCount(), 1);
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("intercom", { action: "send", to: "orchestrator" })] },
+				{ delay: 500, jsonl: [events.assistantMessage("after intercom")] },
+			],
+		});
+
+		let detachEmitted = false;
+		const intercomRun = runSync(tempDir, agents, "intercom", "Intercom task", {
+			runId: "active-intercom",
+			allowIntercomDetach: true,
+			intercomEvents: eventBus,
+			onUpdate: (update) => {
+				if (detachEmitted) return;
+				const progress = (update as { details?: { progress?: Array<{ currentTool?: string }> } }).details?.progress;
+				const sawIntercom = Array.isArray(progress) && progress.some((p) => p?.currentTool === "intercom");
+				if (!sawIntercom) return;
+				detachEmitted = true;
+				eventBus.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "parallel-request" });
+			},
+		});
+
+		const [quietResult, intercomResult] = await Promise.all([quietRun, intercomRun]);
+
+		assert.equal(quietResult.exitCode, 0);
+		assert.equal(quietResult.detached, undefined);
+		assert.equal(intercomResult.exitCode, 0);
+		assert.equal(intercomResult.detached, true);
+		assert.equal(firstDetachResponse, true);
 	});
 
 	it("handles stderr without exit code as info (not error)", async () => {

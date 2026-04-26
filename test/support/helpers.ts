@@ -23,6 +23,24 @@ export function removeTempDir(dir: string): void {
 	} catch {}
 }
 
+export function createEventBus() {
+	const listeners = new Map<string, Set<(payload: unknown) => void>>();
+	return {
+		on(channel: string, handler: (payload: unknown) => void) {
+			const channelListeners = listeners.get(channel) ?? new Set();
+			channelListeners.add(handler);
+			listeners.set(channel, channelListeners);
+			return () => {
+				channelListeners.delete(handler);
+				if (channelListeners.size === 0) listeners.delete(channel);
+			};
+		},
+		emit(channel: string, payload: unknown) {
+			for (const handler of listeners.get(channel) ?? []) handler(payload);
+		},
+	};
+}
+
 interface AgentConfig {
 	name: string;
 	description?: string;

@@ -243,13 +243,11 @@ async function runSingleAttempt(
 		};
 
 		const unsubscribeIntercomDetach = options.intercomEvents?.on?.(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
-			if (!options.allowIntercomDetach || detached || processClosed) return;
+			if (!options.allowIntercomDetach || detached || processClosed || !intercomStarted) return;
 			if (!payload || typeof payload !== "object") return;
 			const requestId = (payload as { requestId?: unknown }).requestId;
 			if (typeof requestId !== "string" || requestId.length === 0) return;
-			const accepted = intercomStarted;
-			options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, { requestId, accepted });
-			if (!accepted) return;
+			options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, { requestId, accepted: true });
 			detachForIntercom();
 		});
 

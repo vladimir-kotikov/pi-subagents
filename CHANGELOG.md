@@ -7,6 +7,9 @@
 - Added a read-only detail view to `/subagents-status` for inspecting selected async runs, including recent events, output tails, and useful run paths.
 - Added a packaged `/parallel-review` prompt template for launching fresh-context adversarial review subagents.
 
+### Fixed
+- Parallel and chain child runs now detach cleanly when a child uses intercom, preventing incoming handoff messages from aborting the parent foreground run.
+
 ## [0.18.1] - 2026-04-25
 
 ### Changed
