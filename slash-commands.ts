@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey } from "@mariozechner/pi-tui";
-import { discoverAgents, discoverAgentsAll } from "./agents.ts";
+import { discoverAgents, discoverAgentsAll, type ChainConfig } from "./agents.ts";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
 import { SubagentsStatusComponent } from "./subagents-status.ts";
 import { discoverAvailableSkills } from "./skills.ts";
@@ -106,6 +106,36 @@ const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) => (pre
 	}
 
 	return agents.filter((a) => a.name.startsWith(lastWord)).map((a) => ({ value: `${beforeLastWord}${a.name}`, label: a.name }));
+};
+
+const discoverSavedChains = (cwd: string): ChainConfig[] => {
+	const chainsByName = new Map<string, ChainConfig>();
+	for (const chain of discoverAgentsAll(cwd).chains) {
+		chainsByName.set(chain.name, chain);
+	}
+	return Array.from(chainsByName.values());
+};
+
+const makeChainCompletions = (state: SubagentState) => (prefix: string) => {
+	if (prefix.includes(" ")) return null;
+	return discoverSavedChains(state.baseCwd)
+		.filter((chain) => chain.name.startsWith(prefix))
+		.map((chain) => ({ value: chain.name, label: chain.name }));
+};
+
+const mapSavedChainSteps = (chain: ChainConfig, worktree = false): ChainStep[] => {
+	return (chain.steps as Array<ChainStep & { skills?: string[] | false }>).map((step) => {
+		if (isParallelStep(step)) return worktree ? { ...step, worktree: true } : { ...step };
+		return {
+			agent: step.agent,
+			task: step.task || undefined,
+			output: step.output,
+			reads: step.reads,
+			progress: step.progress,
+			skill: step.skill ?? step.skills,
+			model: step.model,
+		};
+	});
 };
 
 async function requestSlashRun(
@@ -328,19 +358,7 @@ async function openAgentManager(
 	if (result.action === "launch") {
 		await runSlashSubagent(pi, ctx, { agent: result.agent, task: result.task, ...launchOptions });
 	} else if (result.action === "launch-chain") {
-		const chainParam = (result.chain.steps as unknown as ChainStep[]).map((step) => {
-			if (isParallelStep(step)) return result.worktree ? { ...step, worktree: true } : { ...step };
-			return {
-				agent: step.agent,
-				task: step.task || undefined,
-				output: step.output,
-				reads: step.reads,
-				progress: step.progress,
-				skill: step.skill ?? (step as typeof step & { skills?: string[] | false }).skills,
-				model: step.model,
-			};
-		});
-		await runSlashSubagent(pi, ctx, { chain: chainParam, task: result.task, ...launchOptions });
+		await runSlashSubagent(pi, ctx, { chain: mapSavedChainSteps(result.chain, result.worktree), task: result.task, ...launchOptions });
 	} else if (result.action === "parallel") {
 		await runSlashSubagent(pi, ctx, {
 			tasks: result.tasks,
@@ -489,24 +507,53 @@ export function registerSlashCommands(
 		},
 	});
 
+	pi.registerCommand("run-chain", {
+		description: "Run a saved chain: /run-chain chainName -- task [--bg] [--fork]",
+		getArgumentCompletions: makeChainCompletions(state),
+		handler: async (args, ctx) => {
+			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+			const delimiterIndex = cleanedArgs.indexOf(" -- ");
+			const usage = "Usage: /run-chain <chainName> -- <task> [--bg] [--fork]";
+			if (delimiterIndex === -1) {
+				ctx.ui.notify(usage, "error");
+				return;
+			}
+			const chainName = cleanedArgs.slice(0, delimiterIndex).trim();
+			const task = cleanedArgs.slice(delimiterIndex + 4).trim();
+			if (!chainName || !task) {
+				ctx.ui.notify(usage, "error");
+				return;
+			}
+			const chain = discoverSavedChains(state.baseCwd).find((candidate) => candidate.name === chainName);
+			if (!chain) {
+				ctx.ui.notify(`Unknown chain: ${chainName}`, "error");
+				return;
+			}
+			const params: SubagentParamsLike = { chain: mapSavedChainSteps(chain), task, clarify: false, agentScope: "both" };
+			if (bg) params.async = true;
+			if (fork) params.context = "fork";
+			await runSlashSubagent(pi, ctx, params);
+		},
+	});
+
 	pi.registerCommand("parallel", {
 		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
-			handler: async (args, ctx) => {
-				const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-				const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
-				if (!parsed) return;
-				const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
-					agent: name,
-					task: stepTask ?? parsed.task,
-					...(config.output !== undefined ? { output: config.output } : {}),
-					...(config.reads !== undefined ? { reads: config.reads } : {}),
-					...(config.model ? { model: config.model } : {}),
-					...(config.skill !== undefined ? { skill: config.skill } : {}),
-					...(config.progress !== undefined ? { progress: config.progress } : {}),
-				}));
-				const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
-				if (bg) params.async = true;
+		handler: async (args, ctx) => {
+			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+			const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
+			if (!parsed) return;
+			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
+				agent: name,
+				task: stepTask ?? parsed.task,
+				...(config.output !== undefined ? { output: config.output } : {}),
+				...(config.reads !== undefined ? { reads: config.reads } : {}),
+				...(config.model ? { model: config.model } : {}),
+				...(config.skill !== undefined ? { skill: config.skill } : {}),
+				...(config.progress !== undefined ? { progress: config.progress } : {}),
+			}));
+			const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
+			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
 		},

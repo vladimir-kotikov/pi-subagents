@@ -14,13 +14,15 @@ interface EventBus {
 	emit(event: string, data: unknown): void;
 }
 
+type RegisteredSlashCommand = { handler(args: string, ctx: unknown): Promise<void>; getArgumentCompletions?: (prefix: string) => unknown };
+
 interface RegisterSlashCommandsModule {
 	registerSlashCommands?: (
 		pi: {
 			events: EventBus;
 			registerCommand(
 				name: string,
-				spec: { handler(args: string, ctx: unknown): Promise<void>; getArgumentCompletions?: (prefix: string) => unknown },
+				spec: RegisteredSlashCommand,
 			): void;
 			registerShortcut(key: string, spec: { handler(ctx: unknown): Promise<void> }): void;
 			sendMessage(message: unknown): void;
@@ -149,17 +151,19 @@ async function captureAgentManagerParams(result: unknown): Promise<unknown> {
 
 function createCommandContext(
 	overrides: Partial<{
+		cwd: string;
 		hasUI: boolean;
 		custom: (...args: unknown[]) => Promise<unknown>;
+		notify: (message: string, type?: string) => void;
 		setStatus: (key: string, text: string | undefined) => void;
 		sessionManager: unknown;
 	}> = {},
 ) {
 	return {
-		cwd: process.cwd(),
+		cwd: overrides.cwd ?? process.cwd(),
 		hasUI: overrides.hasUI ?? false,
 		ui: {
-			notify: (_message: string) => {},
+			notify: overrides.notify ?? ((_message: string) => {}),
 			setStatus: overrides.setStatus ?? ((_key: string, _text: string | undefined) => {}),
 			onTerminalInput: () => () => {},
 			custom: overrides.custom ?? (async () => undefined),
@@ -167,6 +171,66 @@ function createCommandContext(
 		modelRegistry: { getAvailable: () => [] },
 		sessionManager: overrides.sessionManager,
 	};
+}
+
+async function withTempProject<T>(prefix: string, fn: (root: string) => Promise<T>): Promise<T> {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	fs.mkdirSync(path.join(root, ".pi", "agents"), { recursive: true });
+	try {
+		return await fn(root);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+}
+
+function writeProjectChain(root: string, fileName: string, content: string): void {
+	fs.writeFileSync(path.join(root, ".pi", "agents", fileName), content, "utf-8");
+}
+
+async function captureSlashCommandParams(
+	commandName: string,
+	args: string,
+	cwd: string,
+	setup?: () => void,
+): Promise<{ params: unknown; notifications: string[] }> {
+	return withIsolatedHome(async () => {
+		setup?.();
+		const commands = new Map<string, RegisteredSlashCommand>();
+		const events = createEventBus();
+		let requestedParams: unknown;
+		const notifications: string[] = [];
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const payload = data as { requestId: string; params?: unknown };
+			requestedParams = payload.params;
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId: payload.requestId });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId: payload.requestId,
+				result: {
+					content: [{ type: "text", text: `${commandName} finished` }],
+					details: { mode: "chain", results: [] },
+				},
+				isError: false,
+			});
+		});
+
+		const pi = {
+			events,
+			registerCommand(name: string, spec: RegisteredSlashCommand) {
+				commands.set(name, spec);
+			},
+			registerShortcut() {},
+			sendMessage(_message: unknown) {},
+		};
+
+		registerSlashCommands!(pi, createState(cwd));
+		await commands.get(commandName)!.handler(args, createCommandContext({
+			cwd,
+			notify: (message) => {
+				notifications.push(message);
+			},
+		}));
+		return { params: requestedParams, notifications };
+	});
 }
 
 describe("slash command custom message delivery", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
@@ -407,6 +471,208 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.equal(requestedTasks, 9);
 		assert.equal(sent.length, 2);
 		assert.match((sent[1] as { content?: string }).content ?? "", /parallel finished/);
+	});
+});
+
+describe("saved chain slash command", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
+	beforeEach(() => {
+		clearSlashSnapshots?.();
+	});
+
+	it("/run-chain launches a saved chain with a shared task", async () => {
+		await withTempProject("pi-run-chain-success-", async (root) => {
+			writeProjectChain(root, "review-flow.chain.md", `---
+name: review-flow
+description: Review flow
+---
+
+## scout
+
+Scan {task}
+
+## reviewer
+
+Review {previous}
+`);
+
+			const { params } = await captureSlashCommandParams("run-chain", "review-flow -- Audit the auth flow", root);
+			const runParams = params as {
+				chain?: Array<{ agent?: string; task?: string }>;
+				task?: string;
+				clarify?: boolean;
+				agentScope?: string;
+				async?: unknown;
+				context?: unknown;
+			};
+
+			assert.deepEqual(runParams.chain?.map(({ agent, task }) => ({ agent, task })), [
+				{ agent: "scout", task: "Scan {task}" },
+				{ agent: "reviewer", task: "Review {previous}" },
+			]);
+			assert.equal(runParams.task, "Audit the auth flow");
+			assert.equal(runParams.clarify, false);
+			assert.equal(runParams.agentScope, "both");
+			assert.equal(runParams.async, undefined);
+			assert.equal(runParams.context, undefined);
+		});
+	});
+
+	it("/run-chain reports an unknown saved chain without launching", async () => {
+		await withTempProject("pi-run-chain-unknown-", async (root) => {
+			const { params, notifications } = await captureSlashCommandParams("run-chain", "missing -- Do work", root);
+
+			assert.equal(params, undefined);
+			assert.deepEqual(notifications, ["Unknown chain: missing"]);
+		});
+	});
+
+	it("/run-chain suggests saved chain names", async () => {
+		await withTempProject("pi-run-chain-completions-", async (root) => {
+			writeProjectChain(root, "review-flow.chain.md", `---
+name: review-flow
+description: Review flow
+---
+
+## scout
+
+Scan
+`);
+			writeProjectChain(root, "release-flow.chain.md", `---
+name: release-flow
+description: Release flow
+---
+
+## planner
+
+Plan
+`);
+			writeProjectChain(root, "triage.chain.md", `---
+name: triage
+description: Triage flow
+---
+
+## scout
+
+Triage
+`);
+
+			await withIsolatedHome(async () => {
+				const commands = new Map<string, RegisteredSlashCommand>();
+				const pi = {
+					events: createEventBus(),
+					registerCommand(name: string, spec: RegisteredSlashCommand) {
+						commands.set(name, spec);
+					},
+					registerShortcut() {},
+					sendMessage(_message: unknown) {},
+				};
+
+				registerSlashCommands!(pi, createState(root));
+				const completions = commands.get("run-chain")!.getArgumentCompletions!("re") as Array<{ value: string; label: string }>;
+				assert.deepEqual(completions.map((completion) => completion.value).sort(), ["release-flow", "review-flow"]);
+				assert.deepEqual(completions.map((completion) => completion.label).sort(), ["release-flow", "review-flow"]);
+				assert.equal(commands.get("run-chain")!.getArgumentCompletions!("review-flow -- "), null);
+			});
+		});
+	});
+
+	it("/run-chain maps --bg to async execution", async () => {
+		await withTempProject("pi-run-chain-bg-", async (root) => {
+			writeProjectChain(root, "review-flow.chain.md", `---
+name: review-flow
+description: Review flow
+---
+
+## scout
+
+Scan
+`);
+
+			const { params } = await captureSlashCommandParams("run-chain", "review-flow -- Audit --bg", root);
+
+			assert.equal((params as { async?: unknown }).async, true);
+			assert.equal((params as { context?: unknown }).context, undefined);
+		});
+	});
+
+	it("/run-chain maps --fork to forked context", async () => {
+		await withTempProject("pi-run-chain-fork-", async (root) => {
+			writeProjectChain(root, "review-flow.chain.md", `---
+name: review-flow
+description: Review flow
+---
+
+## scout
+
+Scan
+`);
+
+			const { params } = await captureSlashCommandParams("run-chain", "review-flow -- Audit --fork", root);
+
+			assert.equal((params as { context?: unknown }).context, "fork");
+			assert.equal((params as { async?: unknown }).async, undefined);
+		});
+	});
+
+	it("/run-chain prefers a project saved chain over a same-named user chain", async () => {
+		await withTempProject("pi-run-chain-priority-", async (root) => {
+			writeProjectChain(root, "review-flow.chain.md", `---
+name: review-flow
+description: Project review flow
+---
+
+## scout
+
+Project chain task
+`);
+
+			const { params } = await captureSlashCommandParams("run-chain", "review-flow -- Shared task", root, () => {
+				const userAgentsDir = path.join(os.homedir(), ".agents");
+				fs.mkdirSync(userAgentsDir, { recursive: true });
+				fs.writeFileSync(path.join(userAgentsDir, "review-flow.chain.md"), `---
+name: review-flow
+description: User review flow
+---
+
+## scout
+
+User chain task
+`, "utf-8");
+			});
+
+			assert.equal((params as { chain?: Array<{ task?: string }> }).chain?.[0]?.task, "Project chain task");
+		});
+	});
+
+	it("/run-chain preserves saved step behavior fields", async () => {
+		await withTempProject("pi-run-chain-fields-", async (root) => {
+			writeProjectChain(root, "field-flow.chain.md", `---
+name: field-flow
+description: Field flow
+---
+
+## scout
+output: context.md
+reads: input.md, notes.md
+model: openai/gpt-5.5
+skills: research, audit
+progress: true
+
+Gather context
+`);
+
+			const { params } = await captureSlashCommandParams("run-chain", "field-flow -- Shared task", root);
+
+			assert.deepEqual((params as { chain?: unknown[] }).chain?.[0], {
+				agent: "scout",
+				task: "Gather context",
+				output: "context.md",
+				reads: ["input.md", "notes.md"],
+				progress: true,
+				skill: ["research", "audit"],
+				model: "openai/gpt-5.5",
+			});
+		});
 	});
 });
 
