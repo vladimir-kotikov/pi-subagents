@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { TEMP_ARTIFACTS_DIR, type ArtifactPaths } from "./types.ts";
 const CLEANUP_MARKER_FILE = ".last-cleanup";
 
@@ -74,7 +75,7 @@ export function cleanupOldArtifacts(dir: string, maxAgeDays: number): void {
 export function cleanupAllArtifactDirs(maxAgeDays: number): void {
 	cleanupOldArtifacts(TEMP_ARTIFACTS_DIR, maxAgeDays);
 
-	const sessionsBase = path.join(os.homedir(), ".pi", "agent", "sessions");
+	const sessionsBase = path.join(getAgentDir(), "sessions");
 	if (!fs.existsSync(sessionsBase)) return;
 
 	let dirs: string[];

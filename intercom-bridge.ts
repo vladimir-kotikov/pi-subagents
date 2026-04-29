@@ -1,12 +1,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import type { ExtensionConfig, IntercomBridgeConfig, IntercomBridgeMode } from "./types.ts";
 
-const DEFAULT_INTERCOM_EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "pi-intercom");
-const DEFAULT_INTERCOM_CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "intercom", "config.json");
-const DEFAULT_SUBAGENT_CONFIG_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent");
+const DEFAULT_INTERCOM_EXTENSION_DIR = path.join(getAgentDir(), "extensions", "pi-intercom");
+const DEFAULT_INTERCOM_CONFIG_PATH = path.join(getAgentDir(), "intercom", "config.json");
+const DEFAULT_SUBAGENT_CONFIG_DIR = path.join(getAgentDir(), "extensions", "subagent");
 const DEFAULT_INTERCOM_TARGET_PREFIX = "subagent-chat";
 export const INTERCOM_BRIDGE_MARKER = "Intercom orchestration channel:";
 const DEFAULT_INTERCOM_BRIDGE_TEMPLATE = `The inherited thread is reference-only. Do not continue that conversation or send questions, status updates, or completion handoffs to the orchestrator in normal assistant text.

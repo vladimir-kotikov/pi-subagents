@@ -16,7 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, type ToolDefinition, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
 import { discoverAgents } from "./agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
@@ -66,7 +66,7 @@ function getSubagentSessionRoot(parentSessionFile: string | null): string {
 }
 
 function loadConfig(): ExtensionConfig {
-	const configPath = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
+	const configPath = path.join(getAgentDir(), "extensions", "subagent", "config.json");
 	try {
 		if (fs.existsSync(configPath)) {
 			return JSON.parse(fs.readFileSync(configPath, "utf-8")) as ExtensionConfig;
